@@ -1,11 +1,14 @@
 #include "archive.h"
 
-#ifdef _WIN32
+#if defined(ZSIGN_SYSTEM_MINIZIP_NG)
+#include <zip.h>
+#include <unzip.h>
+#elif defined(ZSIGN_SYSTEM_MINIZIP)
 #include <minizip/zip.h>
 #include <minizip/unzip.h>
 #else
-#include <zip.h>
-#include <unzip.h>
+#include "third-party/minizip/zip.h"
+#include "third-party/minizip/unzip.h"
 #endif
 
 void Zip::GetModificationTime(const char* path, void* zfi)
@@ -24,13 +27,14 @@ void Zip::GetModificationTime(const char* path, void* zfi)
 		zi->tmz_date.tm_mon = tm.tm_mon;
 		zi->tmz_date.tm_year = tm.tm_year + 1900;
 #else
-		struct tm* tm = localtime(&st.st_mtime);
-		zi->tmz_date.tm_sec = tm->tm_sec;
-		zi->tmz_date.tm_min = tm->tm_min;
-		zi->tmz_date.tm_hour = tm->tm_hour;
-		zi->tmz_date.tm_mday = tm->tm_mday;
-		zi->tmz_date.tm_mon = tm->tm_mon;
-		zi->tmz_date.tm_year = tm->tm_year + 1900;
+		struct tm tm = { 0 };
+		localtime_r(&st.st_mtime, &tm);
+		zi->tmz_date.tm_sec = tm.tm_sec;
+		zi->tmz_date.tm_min = tm.tm_min;
+		zi->tmz_date.tm_hour = tm.tm_hour;
+		zi->tmz_date.tm_mday = tm.tm_mday;
+		zi->tmz_date.tm_mon = tm.tm_mon;
+		zi->tmz_date.tm_year = tm.tm_year + 1900;
 #endif
 	}
 }
@@ -138,7 +142,7 @@ bool Zip::_EnumZipItems(const char* zip_file, enum_zip_items_callback callback)
 	bool bRet = true;
 	unz_file_info64 fi = { 0 };
 	char szPath[PATH_MAX] = { 0 };
-	for (int i = 0; i < gi.number_entry; i++) {
+	for (uint64_t i = 0; i < gi.number_entry; i++) {
 		if (UNZ_OK != unzGetCurrentFileInfo64(uf, &fi, szPath, PATH_MAX, NULL, 0, NULL, 0)) {
 			bRet = false;
 			break;
@@ -153,9 +157,19 @@ bool Zip::_EnumZipItems(const char* zip_file, enum_zip_items_callback callback)
 #endif
 
 		bool bFolder = false;
-		if (('/' == strPath.back())) {
+		if (!strPath.empty() && ('/' == strPath.back())) {
 			bFolder = true;
 			strPath.pop_back();
+		}
+
+		if (strPath.empty()) {
+			if (i < gi.number_entry - 1) {
+				if (UNZ_OK != unzGoToNextFile(uf)) {
+					bRet = false;
+					break;
+				}
+			}
+			continue;
 		}
 
 		if (NULL != callback) {
@@ -203,11 +217,14 @@ bool Zip::_ReadFileFromZip(void* hZip, const string& strPath, const string& strR
 	if (NULL != pbuff) {
 		int32_t nReaded = unzReadCurrentFile(hZip, pbuff, uBufSize);
 		while (nReaded > 0) {
-			if (nReaded != fwrite(pbuff, 1, nReaded, fp)) {
+			if ((size_t)nReaded != fwrite(pbuff, 1, (size_t)nReaded, fp)) {
 				bRet = false;
 				break;
 			}
 			nReaded = unzReadCurrentFile(hZip, pbuff, uBufSize);
+		}
+		if (nReaded < 0) {
+			bRet = false;
 		}
 		free(pbuff);
 	} else {
@@ -219,9 +236,44 @@ bool Zip::_ReadFileFromZip(void* hZip, const string& strPath, const string& strR
 	return bRet;
 }
 
+static bool _IsPathSafe(const string& strPath)
+{
+	if (strPath.empty()) {
+		return false;
+	}
+
+	string strNormalized = strPath;
+	ZUtil::StringReplace(strNormalized, "\\", "/");
+	if (strNormalized[0] == '/' || strNormalized[0] == '\\') {
+		return false;
+	}
+	if (string::npos != strNormalized.find(':')) {
+		return false;
+	}
+
+	size_t start = 0;
+	size_t len = strNormalized.size();
+	while (start < len) {
+		size_t end = strNormalized.find('/', start);
+		if (end == string::npos) {
+			end = len;
+		}
+		size_t compLen = end - start;
+		if (compLen == 2 && strNormalized[start] == '.' && strNormalized[start + 1] == '.') {
+			return false;
+		}
+		start = end + 1;
+	}
+	return true;
+}
+
 bool Zip::_Extract(const char* zip_file, const char* output_folder)
 {
 	return _EnumZipItems(zip_file, [&](unzFile uFile, bool bFolder, const string& strPath) {
+		if (!_IsPathSafe(strPath)) {
+			ZLog::ErrorV(">>> Zip: Skipping unsafe path: %s\n", strPath.c_str());
+			return true;
+		}
 		if (bFolder) {
 			if (!ZFile::CreateFolderV("%s/%s", output_folder, strPath.c_str())) {
 				return false;

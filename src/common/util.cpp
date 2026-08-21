@@ -51,22 +51,6 @@ uint64_t ZUtil::GetMicroSecond()
 #endif
 }
 
-bool  ZUtil::SystemExecV(const char* szCmd, ...)
-{
-	FORMAT_V(szCmd, szRealCmd);
-
-	if (strlen(szRealCmd) <= 0) {
-		return false;
-	}
-
-	int status = system(szRealCmd);
-	if (0 != status) {
-		ZLog::ErrorV("SystemExec: \"%s\", error!\n", szRealCmd);
-		return false;
-	}
-	return true;
-}
-
 uint16_t ZUtil::Swap(uint16_t value)
 {
 	return ((value >> 8) & 0x00ff) | ((value << 8) & 0xff00);
@@ -150,8 +134,9 @@ const char* ZUtil::GetBaseName(const char* path)
 
 int ZUtil::builtin_clzll(uint64_t x)
 {
-	//__builtin_clzll(x);
-
+#if defined(__GNUC__) || defined(__clang__)
+	return x == 0 ? 64 : __builtin_clzll(x);
+#else
 	if (x == 0) {
 		return 64;
 	}
@@ -182,4 +167,5 @@ int ZUtil::builtin_clzll(uint64_t x)
 	}
 
 	return count;
+#endif
 }

@@ -43,13 +43,7 @@ void* ZFile::MapFile(const char* path, size_t offset, size_t size, size_t* psize
 #else
 
 	int fd = open(path, ro ? O_RDONLY : O_RDWR);
-	if (fd <= 0) {
-		if(chmod(path, 0755) == 0) {
-			fd = open(path, ro ? O_RDONLY : O_RDWR);
-		}
-	}
-	
-	if (fd > 0) {
+	if (fd >= 0) {
 		if (size <= 0) {
 			struct stat st = { 0 };
 			fstat(fd, &st);
@@ -345,7 +339,7 @@ bool ZFile::CopyFile(const char* szSrcFile, const char* szDestFile)
 	if (-1 != src_id) {
 		dest_fd = open(szDestFile, O_CREAT | O_WRONLY | O_TRUNC, 0644);
 		if (-1 != dest_fd) {
-			char buffer[4096];
+			char buffer[65536];
 			ssize_t bytes_read = read(src_id, buffer, sizeof(buffer));
 			while (bytes_read > 0) {
 				sum_readed += bytes_read;
